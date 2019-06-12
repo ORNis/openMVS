@@ -322,24 +322,34 @@ bool Scene::Import(const String& fileName)
 // Mesh cut with svm parameters
 bool Scene::SVMCutMesh(const String& SVMFileName, const size_t label)
 {
-	const auto svm = cv::ml::SVM::load(SVMFileName);
-	//TODO check loading
+	const auto svm = cv::ml::SVM::load(SVMFileName); 	//TODO check loading
+
 	MVS::Mesh::VertexIdxArr vertexToremove;
 	MVS::Mesh::FaceIdxArr facesToremove;
 
 	mesh.ListIncidenteFaces(); mesh.ListIncidenteVertices();
-	int count_ok = 0;
+
+	cv::Mat samplesMat = cv::Mat::zeros(mesh.vertices.size(), 3, CV_32FC1);
+	cv::Mat labelsMat = cv::Mat::zeros(mesh.vertices.size(), 1, CV_32FC1);
 	FOREACH(idxV, mesh.vertices)
 	{
-		cv::Mat sampleMat = (cv::Mat_<float>(1,3) << mesh.vertices[idxV].x,mesh.vertices[idxV].y, mesh.vertices[idxV].z);
-		float predicted_label = svm->predict(sampleMat);
-		if(predicted_label != label)
-		{
-			vertexToremove.Insert(idxV);
-			facesToremove.Join(mesh.vertexFaces[idxV]);
-		}
+		const auto & pt = mesh.vertices[idxV];
+
+		samplesMat.at<float>(idxV, 0) = pt.x;
+		samplesMat.at<float>(idxV, 1) = pt.y;
+		samplesMat.at<float>(idxV, 2) = pt.z;
 	}
 	
+	svm->predict(samplesMat, labelsMat);
+
+	FOREACH(idxV, mesh.vertices)
+	{
+		if(label != labelsMat.at<float>(idxV))
+		{
+			facesToremove.Join(mesh.vertexFaces[idxV]);
+		} 
+	}
+
 	mesh.RemoveFaces(facesToremove, true);
 	//mesh.RemoveVertices(vertexToremove); //Throw why?
 	return true;
