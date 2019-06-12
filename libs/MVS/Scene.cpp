@@ -330,6 +330,44 @@ bool Scene::Import(const String& fileName)
 } // Import
 /*----------------------------------------------------------------*/
 
+
+// Mesh cut with svm parameters
+bool Scene::SVMCutMesh(const String& SVMFileName, const size_t label)
+{
+	const auto svm = cv::ml::SVM::load(SVMFileName); 	//TODO check loading
+
+	MVS::Mesh::VertexIdxArr vertexToremove;
+	MVS::Mesh::FaceIdxArr facesToremove;
+
+	mesh.ListIncidenteFaces(); mesh.ListIncidenteVertices();
+
+	cv::Mat samplesMat = cv::Mat::zeros(mesh.vertices.size(), 3, CV_32FC1);
+	cv::Mat labelsMat = cv::Mat::zeros(mesh.vertices.size(), 1, CV_32FC1);
+	FOREACH(idxV, mesh.vertices)
+	{
+		const auto & pt = mesh.vertices[idxV];
+
+		samplesMat.at<float>(idxV, 0) = pt.x;
+		samplesMat.at<float>(idxV, 1) = pt.y;
+		samplesMat.at<float>(idxV, 2) = pt.z;
+	}
+	
+	svm->predict(samplesMat, labelsMat);
+
+	FOREACH(idxV, mesh.vertices)
+	{
+		if(label != labelsMat.at<float>(idxV))
+		{
+			facesToremove.Join(mesh.vertexFaces[idxV]);
+		} 
+	}
+
+	mesh.RemoveFaces(facesToremove, true);
+	//mesh.RemoveVertices(vertexToremove); //Throw why?
+	return true;
+}
+
+
 bool Scene::Load(const String& fileName, bool bImport)
 {
 	TD_TIMER_STARTD();
