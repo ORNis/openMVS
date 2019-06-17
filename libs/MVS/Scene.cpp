@@ -322,36 +322,85 @@ bool Scene::Import(const String& fileName)
 // Mesh cut with svm parameters
 bool Scene::SVMCutMesh(const String& SVMFileName, const size_t label)
 {
-	const auto svm = cv::ml::SVM::load(SVMFileName); 	//TODO check loading
 
-	MVS::Mesh::VertexIdxArr vertexToremove;
-	MVS::Mesh::FaceIdxArr facesToremove;
+	enum FaceClassif: uint8_t
+	{
+		INSIDE = 0,
+		CUT = 1,
+		OUTSIDE = 2
+	};
 
+	typedef cList<FaceClassif,FaceClassif,0,8192,Mesh::FIndex> ClassifArr;
+
+	Mesh::FaceIdxArr facesToRemove;
+	ClassifArr facesClassif;
+
+	const auto svm = cv::ml::SVM::load(SVMFileName); 	//TODO check loading return false
+
+	// Build optional data structures
 	mesh.ListIncidenteFaces(); mesh.ListIncidenteVertices();
 
-	cv::Mat samplesMat = cv::Mat::zeros(mesh.vertices.size(), 3, CV_32FC1);
-	cv::Mat labelsMat = cv::Mat::zeros(mesh.vertices.size(), 1, CV_32FC1);
+	cv::Mat samplesMat = cv::Mat::zeros(mesh.vertices.size(), 3, cv::DataType<Mesh::Type>::type); 
+	cv::Mat labelsMat = cv::Mat::zeros(mesh.vertices.size(), 1, cv::DataType<Mesh::Type>::type);
 	FOREACH(idxV, mesh.vertices)
 	{
 		const auto & pt = mesh.vertices[idxV];
 
-		samplesMat.at<float>(idxV, 0) = pt.x;
-		samplesMat.at<float>(idxV, 1) = pt.y;
-		samplesMat.at<float>(idxV, 2) = pt.z;
+		samplesMat.at<Mesh::Type>(idxV, 0) = pt.x;
+		samplesMat.at<Mesh::Type>(idxV, 1) = pt.y;
+		samplesMat.at<Mesh::Type>(idxV, 2) = pt.z;
 	}
-	
+	LOG("BEGIN Vertices Classification");
 	svm->predict(samplesMat, labelsMat);
+	LOG("END Vertices Classification");
 
-	FOREACH(idxV, mesh.vertices)
+	FOREACH(idxF, mesh.faces)
 	{
-		if(label != labelsMat.at<float>(idxV))
+		int count_invalid = 0;
+		for(size_t i = 0; i < 3; ++i)
 		{
-			facesToremove.Join(mesh.vertexFaces[idxV]);
-		} 
+			if(label != labelsMat.at<float>(mesh.faces[idxF][i]))
+			{
+				++count_invalid;
+			} 
+		}
+		if(count_invalid == 0)
+			facesClassif.Insert(FaceClassif::INSIDE);
+		else if(count_invalid == 3)
+		{
+			facesClassif.Insert(FaceClassif::OUTSIDE);
+			facesToRemove.InsertSortUnique(idxF);
+		}
+		else if(count_invalid > 0)
+			facesClassif.Insert(FaceClassif::CUT);	
 	}
 
-	mesh.RemoveFaces(facesToremove, true);
-	//mesh.RemoveVertices(vertexToremove); //Throw why?
+	ASSERT(facesClassif.size() == mesh.faces.size());
+
+	FOREACH(idxF, mesh.faces) 
+	{
+		if(facesClassif[idxF] == FaceClassif::INSIDE)
+		{
+			for(size_t i = 0; i < 3; ++i)
+			{
+				const auto & adj_faces = mesh.vertexFaces[mesh.faces[idxF][i]];
+				bool keep_face = false; //TODO it's not the most clever way to do that 
+				FOREACH(idxAdjF, adj_faces)
+				{
+					if(idxAdjF != idxF)
+					{
+						if(facesClassif[idxAdjF] == FaceClassif::CUT)
+							keep_face = true;
+					}
+				}
+				if(!keep_face)
+					facesToRemove.InsertSortUnique(idxF);
+			}
+		}
+	}
+
+	LOG("NUM Face(s) to Remove %i", facesToRemove.size());
+	mesh.RemoveFaces(facesToRemove, true);
 	return true;
 }
 
