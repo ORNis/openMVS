@@ -37,7 +37,6 @@ namespace nomoko {
   /* brief:
      Contains the information for each point in the sparse point cloud
      pos       -> 3D position of the point
-     color     -> RGB values for the point
      viewList  -> List of views that see this point
      */
   struct Point {
