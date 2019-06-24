@@ -94,11 +94,11 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	config.add_options()
 		("input-file,i", boost::program_options::value<std::string>(&OPT::strInputFileName), "input filename containing camera poses and image list")
 		("output-dir,o", boost::program_options::value<std::string>(&OPT::strOutputDirectory), "output directory for storing the mesh")
-		("voxel-size,v", boost::program_options::value<float>(&OPT::fVoxelSize)->default_value(0.01f), "size of a cell in the voxel grid: level of simplification of the original point cloud")
-		("min-cluster-size,m", boost::program_options::value<unsigned>(&OPT::nMinClusterSize)->default_value(25), "Min number of camera in a cluster (25)" )
-		("max-cluster-size,M", boost::program_options::value<unsigned>(&OPT::nMaxClusterSize)->default_value(50), "Max number of camera in a cluster (50)")
-		("cluster-overlap,o", boost::program_options::value<unsigned>(&OPT::nClusterOverlap)->default_value(4), "number of views in overlap" )
-		("svm-classification,s", boost::program_options::bool_switch(&OPT::bDoSVM), "do the SVM classification" )
+		("voxel-size,v", boost::program_options::value<float>(&OPT::fVoxelSize)->default_value(10.0f), "size of a cell in the voxel grid: level of simplification of the original point cloud")
+		("min-cluster-size,m", boost::program_options::value<unsigned>(&OPT::nMinClusterSize)->default_value(25), "Min number of camera in a cluster" )
+		("max-cluster-size,M", boost::program_options::value<unsigned>(&OPT::nMaxClusterSize)->default_value(50), "Max number of camera in a cluster")
+		("cluster-overlap,o", boost::program_options::value<unsigned>(&OPT::nClusterOverlap)->default_value(4), "Number of views in overlap [Not implemented yet]" )
+		("svm-classification,s", boost::program_options::bool_switch(&OPT::bDoSVM), "Do the SVM classification [NOT Implemented yet]" )
 		;
 
 	boost::program_options::options_description cmdline_options;
@@ -243,11 +243,38 @@ int main(int argc, LPCTSTR* argv)
 		domset_points.push_back(p);
 	}
 
-	std::cout << domset_points.size() << std::endl;
-
 	nomoko::Domset domset_instance(domset_points, domset_views, domset_cameras, OPT::fVoxelSize);
 
 	domset_instance.clusterViews(OPT::nMinClusterSize, OPT::nMaxClusterSize);
+
+	domset_instance.printClusters();
+	
+	#if TD_VERBOSE != TD_VERBOSE_OFF
+	if (VERBOSITY_LEVEL > 2)
+		domset_instance.exportToPLY("cluster_omvs.ply");
+	#endif
+
+
+	const auto domset_clusters = domset_instance.getClusters();
+
+	for (int i = 0; i < domset_clusters.size(); ++i)
+	{
+		const auto & cl = domset_clusters[i];
+
+		Scene scene_cluster;
+
+		scene_cluster.platforms = scene.platforms; //FIXME We copy the whole plateforms for now, it's easier
+
+		for(const image_id : cl)
+		{
+			const size_t ID = view_bkwd_reindexing[image_id];
+			const auto image = scene.images[ID];
+			//image.ID = ID;  MVS::Image::ID do not exists 
+			scene_cluster.images.Insert(scene.images[ID]);
+		}
+		// scene_cluster.Save("cluster_" +  i + ".mvs");
+	}
+
 
 	// save the final mvs file and its associated point cloud
 	// scene.Save(baseFileName+_T(".mvs"), (ARCHIVE_TYPE)OPT::nArchiveType);
