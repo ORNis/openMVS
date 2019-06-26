@@ -93,11 +93,11 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	boost::program_options::options_description config("Texture options");
 	config.add_options()
 		("input-file,i", boost::program_options::value<std::string>(&OPT::strInputFileName), "input filename containing camera poses and image list")
-		("output-dir,o", boost::program_options::value<std::string>(&OPT::strOutputDirectory), "output directory for storing the mesh")
+		("output-dir,o", boost::program_options::value<std::string>(&OPT::strOutputDirectory), "output directory for storing the clusters")
 		("voxel-size,v", boost::program_options::value<float>(&OPT::fVoxelSize)->default_value(10.0f), "size of a cell in the voxel grid: level of simplification of the original point cloud")
 		("min-cluster-size,m", boost::program_options::value<unsigned>(&OPT::nMinClusterSize)->default_value(25), "Min number of camera in a cluster" )
 		("max-cluster-size,M", boost::program_options::value<unsigned>(&OPT::nMaxClusterSize)->default_value(50), "Max number of camera in a cluster")
-		("cluster-overlap,o", boost::program_options::value<unsigned>(&OPT::nClusterOverlap)->default_value(4), "Number of views in overlap [Not implemented yet]" )
+		("cluster-overlap,o", boost::program_options::value<unsigned>(&OPT::nClusterOverlap)->default_value(4), "Number of views in overlap [NOT implemented yet]" )
 		("svm-classification,s", boost::program_options::bool_switch(&OPT::bDoSVM), "Do the SVM classification [NOT Implemented yet]" )
 		;
 
@@ -203,7 +203,7 @@ int main(int argc, LPCTSTR* argv)
 	if (!scene.Load(MAKE_PATH_SAFE(OPT::strInputFileName)))
 		return EXIT_FAILURE;
 
-	const String baseFileName(MAKE_PATH_SAFE(Util::getFileFullName(OPT::strOutputDirectory)));
+	const String baseFileName(MAKE_PATH_SAFE(Util::getFileFullName(OPT::strInputFileName)));
 
 	{
 	// compute clustering
@@ -249,9 +249,10 @@ int main(int argc, LPCTSTR* argv)
 
 	domset_instance.printClusters();
 	
+	
 	#if TD_VERBOSE != TD_VERBOSE_OFF
 	if (VERBOSITY_LEVEL > 2)
-		domset_instance.exportToPLY("cluster_omvs.ply");
+		domset_instance.exportToPLY(baseFileName + _T("_clusters.ply"));
 	#endif
 
 
@@ -263,20 +264,20 @@ int main(int argc, LPCTSTR* argv)
 
 		Scene scene_cluster;
 
-		scene_cluster.platforms = scene.platforms; //FIXME We copy the whole plateforms for now, it's easier
+		scene_cluster.platforms = scene.platforms; //FIXME We copy all the plateforms for now, it's easier
 
-		for(const image_id : cl)
+		for (const auto image_id : cl)
 		{
 			const size_t ID = view_bkwd_reindexing[image_id];
-			const auto image = scene.images[ID];
-			//image.ID = ID;  MVS::Image::ID do not exists 
+			auto & image = scene.images[ID];
+			image.ID = ID; 
 			scene_cluster.images.Insert(scene.images[ID]);
 		}
-		// scene_cluster.Save("cluster_" +  i + ".mvs");
+		scene_cluster.Save(baseFileName + String::FormatString("_cluster_%i.mvs", i), (ARCHIVE_TYPE)OPT::nArchiveType);
 	}
 
 
-	// save the final mvs file and its associated point cloud
+	//TODO save the final mvs file and its associated point cloud
 	// scene.Save(baseFileName+_T(".mvs"), (ARCHIVE_TYPE)OPT::nArchiveType);
 	// scene.pointcloud.Save(baseFileName+OPT::strExportType);
 	

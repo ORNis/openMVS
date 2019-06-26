@@ -42,8 +42,8 @@ void Domset::normalizePointCloud()
 
   const size_t numResults(1);
   const size_t numPoints(points.size());
-  float totalDist = 0;
-  pcCentre.pos << 0, 0, 0;
+  float totalDist = 0.f;
+  pcCentre.pos << 0.f, 0.f, 0.f;
 #if DOMSET_USE_OPENMP
 #pragma omp parallel for
 #endif
@@ -280,7 +280,7 @@ Eigen::MatrixXf Domset::getSimilarityMatrix(std::map<size_t, size_t> &xId2vId)
       {
         const View v2 = views[vId2];
         const View v1 = views[vId1];
-        const float sv = computeViewSimilaity(v1, v2);
+        const float sv = computeViewSimilarity(v1, v2);
         const float sd = computeViewDistance(vId1, vId2, medianDist);
         const float sim = sv * sd;
         simMat(xId1, xId2) = sim;
@@ -366,14 +366,14 @@ void Domset::findCommonPoints(const View &v1, const View &v2,
   commonPoints.resize(it - commonPoints.begin());
 } // findCommonPoints
 
-const float Domset::computeViewSimilaity(const View &v1, const View &v2)
+float Domset::computeViewSimilarity(const View &v1, const View &v2)
 {
   std::vector<size_t> commonPoints;
   findCommonPoints(v1, v2, commonPoints);
   const size_t numCP = commonPoints.size();
 
   float w = 0.f;
-#if OPENMVG_USE_OPENMP
+#if DOMSET_USE_OPENMP
 #pragma omp parallel for
 #endif
   for_parallel(p, numCP)
@@ -385,14 +385,14 @@ const float Domset::computeViewSimilaity(const View &v1, const View &v2)
     const float angle = acos(c1.dot(c2));
     const float expAngle = exp(-(angle * angle) / kAngleSigma_2);
 //std::cerr << angle <<  " = " << expAngle << std::endl;
-#if OPENMVG_USE_OPENMP
+#if DOMSET_USE_OPENMP
 #pragma omp atomic
 #endif
     w += expAngle;
   }
   const float ans = w / numCP;
   return (ans != ans) ? 0 : ans;
-} // computeViewSimilaity
+} // computeViewSimilarity
 
 void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
                                std::vector<std::vector<size_t>> &clusters)
@@ -416,7 +416,7 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
     Eigen::MatrixXf AS = A + S;
     std::vector<size_t> I(numX);
     Eigen::VectorXf Y(numX);
-#if OPENMVG_USE_OPENMP
+#if DOMSET_USE_OPENMP
 #pragma omp parallel for
 #endif
     for (size_t i = 0; i < numX; i++)
@@ -427,7 +427,7 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
 
     std::vector<size_t> I2(numX);
     Eigen::VectorXf Y2(numX);
-#if OPENMVG_USE_OPENMP
+#if DOMSET_USE_OPENMP
 #pragma omp parallel for
 #endif
     for (size_t i = 0; i < numX; i++)
@@ -444,7 +444,7 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
     Eigen::MatrixXf Aold = A;
 
     Eigen::MatrixXf Rp = (R.array() > 0).select(R, 0);
-#if OPENMVG_USE_OPENMP
+#if DOMSET_USE_OPENMP
 #pragma omp parallel for
 #endif
     for (size_t i = 0; i < numX; i++)
@@ -458,7 +458,7 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
     Eigen::VectorXf dA = A.diagonal();
 
     A = (A.array() < 0).select(A, 0);
-#if OPENMVG_USE_OPENMP
+#if DOMSET_USE_OPENMP
 #pragma omp parallel for
 #endif
     for (size_t i = 0; i < numX; i++)
@@ -484,7 +484,6 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
     }
   }
 
-  std::cout << "MAP SIZE" << clMap.size() << std::endl;
   size_t idxForI = 0;
   for (size_t i = 0; i < numX; i++)
   {
