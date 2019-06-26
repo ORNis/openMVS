@@ -94,7 +94,7 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	config.add_options()
 		("input-file,i", boost::program_options::value<std::string>(&OPT::strInputFileName), "input filename containing camera poses and image list")
 		("output-dir,o", boost::program_options::value<std::string>(&OPT::strOutputDirectory), "output directory for storing the clusters")
-		("voxel-size,v", boost::program_options::value<float>(&OPT::fVoxelSize)->default_value(10.0f), "size of a cell in the voxel grid: level of simplification of the original point cloud")
+		("voxel-size,s", boost::program_options::value<float>(&OPT::fVoxelSize)->default_value(10.0f), "size of a cell in the voxel grid: level of simplification of the original point cloud")
 		("min-cluster-size,m", boost::program_options::value<unsigned>(&OPT::nMinClusterSize)->default_value(25), "Min number of camera in a cluster" )
 		("max-cluster-size,M", boost::program_options::value<unsigned>(&OPT::nMaxClusterSize)->default_value(50), "Max number of camera in a cluster")
 		("cluster-overlap,o", boost::program_options::value<unsigned>(&OPT::nClusterOverlap)->default_value(4), "Number of views in overlap [NOT implemented yet]" )
@@ -247,11 +247,9 @@ int main(int argc, LPCTSTR* argv)
 
 	domset_instance.clusterViews(OPT::nMinClusterSize, OPT::nMaxClusterSize);
 
-	domset_instance.printClusters();
-	
-	
 	#if TD_VERBOSE != TD_VERBOSE_OFF
 	if (VERBOSITY_LEVEL > 2)
+		domset_instance.printClusters();
 		domset_instance.exportToPLY(baseFileName + _T("_clusters.ply"));
 	#endif
 
