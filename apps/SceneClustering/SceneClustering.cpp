@@ -4,7 +4,7 @@
  * Copyright (c) 2019 SEACAVE
  *
  * Author(s):
- * 		Romain Janvier <romain.janvier@lepatriscope.com>
+ *      Romain Janvier <romain.janvier@lepatriscope.com>
  *      cDc <cdc.seacave@gmail.com>
  *
  *
@@ -56,7 +56,6 @@ bool bDoSVM;
 unsigned nArchiveType;
 int nProcessPriority;
 unsigned nMaxThreads;
-String strExportType;
 String strConfigFileName;
 boost::program_options::variables_map vm;
 } // namespace OPT
@@ -74,7 +73,6 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 		("help,h", "produce this help message")
 		("working-folder,w", boost::program_options::value<std::string>(&WORKING_FOLDER), "working directory (default current directory)")
 		("config-file,c", boost::program_options::value<std::string>(&OPT::strConfigFileName)->default_value(APPNAME _T(".cfg")), "file name containing program options")
-		("export-type", boost::program_options::value<std::string>(&OPT::strExportType)->default_value(_T("ply")), "file type used to export the 3D scene (ply or obj)")
 		("archive-type", boost::program_options::value<unsigned>(&OPT::nArchiveType)->default_value(2), "project archive type: 0-text, 1-binary, 2-compressed binary")
 		("process-priority", boost::program_options::value<int>(&OPT::nProcessPriority)->default_value(-1), "process priority (below normal by default)")
 		("max-threads", boost::program_options::value<unsigned>(&OPT::nMaxThreads)->default_value(0), "maximum number of threads (0 for using all available cores)")
@@ -92,13 +90,12 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 	// group of options allowed both on command line and in config file
 	boost::program_options::options_description config("Texture options");
 	config.add_options()
-		("input-file,i", boost::program_options::value<std::string>(&OPT::strInputFileName), "input filename containing camera poses and image list")
-		("output-dir,o", boost::program_options::value<std::string>(&OPT::strOutputDirectory), "output directory for storing the clusters")
-		("voxel-size,s", boost::program_options::value<float>(&OPT::fVoxelSize)->default_value(10.0f), "size of a cell in the voxel grid: level of simplification of the original point cloud")
-		("min-cluster-size,m", boost::program_options::value<unsigned>(&OPT::nMinClusterSize)->default_value(25), "Min number of camera in a cluster" )
+		("input-file,i", boost::program_options::value<std::string>(&OPT::strInputFileName), "Input filename containing camera poses and image list")
+		("voxel-size,x", boost::program_options::value<float>(&OPT::fVoxelSize)->default_value(5.f), "Size of a cell in the voxel grid: level of simplification of the original point cloud")
+		("min-cluster-size,m", boost::program_options::value<unsigned>(&OPT::nMinClusterSize)->default_value(30), "Min number of camera in a cluster" )
 		("max-cluster-size,M", boost::program_options::value<unsigned>(&OPT::nMaxClusterSize)->default_value(50), "Max number of camera in a cluster")
 		("cluster-overlap,o", boost::program_options::value<unsigned>(&OPT::nClusterOverlap)->default_value(4), "Number of views in overlap [NOT implemented yet]" )
-		("svm-classification,s", boost::program_options::bool_switch(&OPT::bDoSVM), "Do the SVM classification [NOT Implemented yet]" )
+		//("svm-classification,s", boost::program_options::bool_switch(&OPT::bDoSVM), "Do the SVM classification [NOT Implemented yet]" )
 		;
 
 	boost::program_options::options_description cmdline_options;
@@ -145,9 +142,7 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 
 	if (OPT::strInputFileName.IsEmpty())
 		return false;
-
-	OPT::strExportType = OPT::strExportType.ToLower() == _T("obj") ? _T(".obj") : _T(".ply");
-
+	
 	// initialize optional options
 	Util::ensureValidPath(OPT::strOutputDirectory);
 	Util::ensureUnifySlash(OPT::strOutputDirectory);
@@ -156,7 +151,7 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 
 	if(OPT::nMaxClusterSize < OPT::nMinClusterSize)
 	{
-		LOG_ERR() << "max-cluster-size value must be greater than min-cluster-size value";
+		LOG("max-cluster-size value must be greater than min-cluster-size value");
 		return false;
 	}
 	// initialize global options
@@ -202,20 +197,27 @@ int main(int argc, LPCTSTR* argv)
 	// load and texture the mesh
 	if (!scene.Load(MAKE_PATH_SAFE(OPT::strInputFileName)))
 		return EXIT_FAILURE;
+	
+	if (scene.pointcloud.IsEmpty()) {
+		LOG("error: empty initial point-cloud");
+		return EXIT_FAILURE;
+	}
+
 
 	const String baseFileName(MAKE_PATH_SAFE(Util::getFileFullName(OPT::strInputFileName)));
 
 	{
 	// compute clustering
 	TD_TIMER_START();
+
 	// set up data
 	std::vector<nomoko::Camera> domset_cameras; // Camera is useless in domset...
 	std::vector<nomoko::View> domset_views;
 	std::vector<nomoko::Point> domset_points; // nomoko::Point is an Eigen::Vec3f...
-	std::map<size_t, size_t> view_fwd_reindexing; // get continuous indexing
-	std::map<size_t, size_t> view_bkwd_reindexing; // reverse continuous indexing
+	std::map<uint32_t, uint32_t> view_fwd_reindexing; // get continuous indexing
+	std::map<uint32_t, uint32_t> view_bkwd_reindexing; // reverse continuous indexing
 
-	size_t curr_idx = 0;
+	uint32_t curr_idx = 0;
 	FOREACH(IdxC, scene.images)
 	{
 		const auto & curr_image = scene.images[IdxC];
@@ -245,47 +247,72 @@ int main(int argc, LPCTSTR* argv)
 
 	nomoko::Domset domset_instance(domset_points, domset_views, domset_cameras, OPT::fVoxelSize);
 
-	domset_instance.clusterViews(OPT::nMinClusterSize, OPT::nMaxClusterSize);
+	domset_instance.clusterViews(OPT::nMinClusterSize, OPT::nMaxClusterSize, OPT::nClusterOverlap);
 
 	#if TD_VERBOSE != TD_VERBOSE_OFF
 	if (VERBOSITY_LEVEL > 2)
+	{
 		domset_instance.printClusters();
 		domset_instance.exportToPLY(baseFileName + _T("_clusters.ply"));
+	}
 	#endif
 
-
 	const auto domset_clusters = domset_instance.getClusters();
+	VERBOSE("Clustering completed : %u clusters (%s)", domset_clusters.size(), TD_TIMER_GET_FMT().c_str());
 
-	for (int i = 0; i < domset_clusters.size(); ++i)
+	for (int i = 0; i < domset_clusters.size(); ++i) 
 	{
-		const auto & cl = domset_clusters[i];
+		const auto & cluster = domset_clusters[i];
 
 		Scene scene_cluster;
+		std::map<uint32_t, uint32_t> map_global_to_local;
+		std::vector<uint32_t> global_IDs;
+		scene_cluster.platforms = scene.platforms; // We copy all the plateforms for now, it's easier and harmless
 
-		scene_cluster.platforms = scene.platforms; //FIXME We copy all the plateforms for now, it's easier
-
-		for (const auto image_id : cl)
+		uint32_t local_ID = 0;
+		for (const auto inCluster_ID : cluster)
 		{
-			const size_t ID = view_bkwd_reindexing[image_id];
-			auto & image = scene.images[ID];
-			image.ID = ID; 
-			scene_cluster.images.Insert(scene.images[ID]);
+			const size_t global_ID = view_bkwd_reindexing[inCluster_ID];
+			auto & image = scene.images[global_ID];
+			image.ID = global_ID; 
+			scene_cluster.images.Insert(scene.images[global_ID]);
+			map_global_to_local[global_ID] = local_ID;
+			global_IDs.push_back(global_ID);
+			++local_ID;
 		}
+
+		FOREACH(IdxP, scene.pointcloud.points)
+		{
+			const auto & curr_viewArr = scene.pointcloud.pointViews[IdxP];
+			PointCloud::ViewArr new_viewArr;
+			
+			for(const auto & idxVG: global_IDs)
+			{
+				if(curr_viewArr.FindFirst(idxVG) != PointCloud::ViewArr::NO_INDEX)
+					new_viewArr.InsertSort(map_global_to_local.at(idxVG));
+			}
+
+			if(new_viewArr.GetSize() > 1)
+			{
+				scene_cluster.pointcloud.points.Insert(scene.pointcloud.points[IdxP]);
+				scene_cluster.pointcloud.pointViews.Insert(new_viewArr);
+				if(!scene.pointcloud.colors.IsEmpty())
+					scene_cluster.pointcloud.colors.Insert(scene.pointcloud.colors[IdxP]);
+				if(!scene.pointcloud.pointWeights.IsEmpty())
+					scene_cluster.pointcloud.pointWeights.Insert(scene.pointcloud.pointWeights[IdxP]);
+			}
+		}
+		LOG(String::FormatString("Saving cluster #%i", i));
 		scene_cluster.Save(baseFileName + String::FormatString("_cluster_%i.mvs", i), (ARCHIVE_TYPE)OPT::nArchiveType);
+		scene_cluster.pointcloud.Save(baseFileName + String::FormatString("_cluster_%i.ply", i));
 	}
-
-
-	//TODO save the final mvs file and its associated point cloud
-	// scene.Save(baseFileName+_T(".mvs"), (ARCHIVE_TYPE)OPT::nArchiveType);
-	// scene.pointcloud.Save(baseFileName+OPT::strExportType);
 	
 
 	#if TD_VERBOSE != TD_VERBOSE_OFF
 	if (VERBOSITY_LEVEL > 2)
-		scene.ExportCamerasMLP(baseFileName+_T(".mlp"), baseFileName+OPT::strExportType);
+		scene.ExportCamerasMLP(baseFileName+_T(".mlp"), baseFileName+_T(".ply"));
 	#endif
 	}
-
 
 	Finalize();
 	return EXIT_SUCCESS;

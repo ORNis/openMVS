@@ -1,4 +1,3 @@
-// This file is part of OpenMVG (Open Multiple View Geometry) C++ library.
 // Copyright (c) 2016 nomoko AG, Srivathsan Murali<srivathsan@nomoko.camera>
 
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -162,7 +161,8 @@ void Domset::voxelGridFilter(const float &sizeX, const float &sizeY, const float
   size_t numVoxelX = static_cast<size_t>(ceil(maxPt.pos(0) - minPt.pos(0)) / sizeX);
   size_t numVoxelY = static_cast<size_t>(ceil(maxPt.pos(1) - minPt.pos(1)) / sizeY);
   size_t numVoxelZ = static_cast<size_t>(ceil(maxPt.pos(2) - minPt.pos(2)) / sizeZ);
-  std::cout << "Max = " << maxPt.pos.transpose() << std::endl;
+
+  /* std::cout << "Max = " << maxPt.pos.transpose() << std::endl;
   std::cout << "Min = " << minPt.pos.transpose() << std::endl;
   std::cout << "Max - Min = " << (maxPt.pos - minPt.pos).transpose() << std::endl;
   std::cout << "VoxelSize X = " << sizeX << std::endl;
@@ -171,6 +171,7 @@ void Domset::voxelGridFilter(const float &sizeX, const float &sizeY, const float
   std::cout << "Number Voxel X = " << numVoxelX << std::endl;
   std::cout << "Number Voxel Y = " << numVoxelY << std::endl;
   std::cout << "Number Voxel Z = " << numVoxelZ << std::endl;
+  */
 
   /* adding points to the voxels */
   std::map<size_t, std::vector<size_t>> voxels;
@@ -211,20 +212,20 @@ void Domset::voxelGridFilter(const float &sizeX, const float &sizeY, const float
     if (nPts == 0)
       continue;
 
-    Eigen::Vector3f pos;
+    Eigen::Vector3f curr_pos = Eigen::Vector3f::Zero();
     std::set<size_t> vl;
     for (const auto &p : voxels[vId])
     {
       const Point pt = points[p];
-      pos += pt.pos;
+      curr_pos += pt.pos;
       const size_t numV = pt.viewList.size();
       for (size_t j = 0; j < numV; j++)
         vl.insert(pt.viewList[j]);
     }
-    pos /= (float)nPts;
+    curr_pos /= (float)nPts;
 
     Point newSP;
-    newSP.pos = pos;
+    newSP.pos = curr_pos;
     newSP.viewList = std::vector<size_t>(vl.begin(), vl.end());
 #if DOMSET_USE_OPENMP
 #pragma omp critical(pointsUpdate)
@@ -513,6 +514,7 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
     }
     return (maxValve < 0) ? cl[0] : i;
   };
+
   auto addToNewClMap =
       [](std::map<size_t, std::vector<size_t>> &map, const std::vector<size_t> &cl, const size_t &center) {
         if (map.find(center) == map.end())
@@ -592,6 +594,71 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
       }
     }
   } while (change);
+  
+  // Filling NonOverlapClusters
+  for (auto p = clMap.begin(); p != clMap.end(); ++p)
+  {
+    std::vector<size_t> cl;
+    for (const auto i : p->second)
+    {
+      cl.push_back(xId2vId[i]);
+    }
+    nonOverlapClusters.emplace_back(cl);
+  }
+
+  // find the borders of each cluster
+  auto findBorders = [&](std::vector<size_t> cluster) {
+    auto center = findCenter(cluster);
+    cluster.erase(std::find(cluster.begin(), cluster.end(), center));
+
+    std::vector<size_t> borders;
+    borders.push_back(center);
+    while (borders.size() <= kClusterOverlap)
+    {
+      auto borderView = *std::min_element(cluster.cbegin(), cluster.cend(),
+                                          [&](size_t a, size_t b) {
+                                            const auto ref = borders[borders.size() - 1];
+                                            return S(ref, a) < S(ref, b);
+                                          });
+      borders.push_back(borderView);
+      cluster.erase(std::find(cluster.begin(), cluster.end(), borderView));
+    }
+    borders.erase(borders.begin());
+    return borders;
+  };
+
+  for (auto cluster1 : clMap)
+  {
+    // find border
+    auto borders = findBorders(cluster1.second);
+
+    // add border views to neighbouring cluster
+    for (auto &c : borders)
+    {
+      /// find nearest cluster to border view
+      float minDist = std::numeric_limits<float>::max();
+      size_t clId = clMap.size();
+      for (auto cluster2 : clMap)
+      {
+        /// skip the same cluster
+        if (cluster1.first == cluster2.first)
+          continue;
+        for (auto i : cluster2.second)
+        {
+          const float dist(
+              viewDists(xId2vId[c], xId2vId[i]));
+          if (dist < minDist)
+          {
+            minDist = dist;
+            clId = cluster2.first;
+          }
+        }
+      }
+      clMap[clId].push_back(c);
+    }
+    std::cout << std::endl;
+    finalBorders.push_back(borders);
+  }
 
   // adding it to clusters vector
   for (auto p = clMap.begin(); p != clMap.end(); ++p)
@@ -606,12 +673,13 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
 }
 
 void Domset::clusterViews(std::map<size_t, size_t> &xId2vId, const size_t &minClusterSize,
-                          const size_t &maxClusterSize)
+                          const size_t &maxClusterSize, const size_t &clusterOverlap)
 {
   //  std::cout << "[ Clustering Views ] " << std::endl;
   const size_t umC = views.size();
   kMinClusterSize = minClusterSize;
   kMaxClusterSize = maxClusterSize;
+  kClusterOverlap = clusterOverlap;
 
   std::vector<std::vector<size_t>> clusters;
   computeClustersAP(xId2vId, clusters);
@@ -621,12 +689,13 @@ void Domset::clusterViews(std::map<size_t, size_t> &xId2vId, const size_t &minCl
 }
 
 void Domset::clusterViews(
-    const size_t &minClusterSize, const size_t &maxClusterSize)
+    const size_t &minClusterSize, const size_t &maxClusterSize, const size_t &clusterOverlap)
 {
   //  std::cout << "[ Clustering Views ] " << std::endl;
   const size_t numC = views.size();
   kMinClusterSize = minClusterSize;
   kMaxClusterSize = maxClusterSize;
+  kClusterOverlap = clusterOverlap;
 
   std::map<size_t, size_t> xId2vId;
   for (size_t i = 0; i < numC; i++)
