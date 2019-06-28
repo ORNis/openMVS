@@ -217,19 +217,19 @@ int main(int argc, LPCTSTR* argv)
 	std::map<uint32_t, uint32_t> view_fwd_reindexing; // get continuous indexing
 	std::map<uint32_t, uint32_t> view_bkwd_reindexing; // reverse continuous indexing
 
-	uint32_t curr_idx = 0;
+	uint32_t curr_ID = 0;
 	FOREACH(IdxC, scene.images)
 	{
 		const auto & curr_image = scene.images[IdxC];
 		if(curr_image.IsValid())
 		{
-			view_fwd_reindexing[IdxC] = curr_idx;
-			view_bkwd_reindexing[curr_idx] = IdxC; 
+			view_fwd_reindexing[IdxC] = curr_ID;
+			view_bkwd_reindexing[curr_ID] = IdxC; 
 			nomoko::View v;
 			v.rot = Eigen::Matrix<double,3,3,1>(curr_image.camera.R).cast<float>();
 			v.trans = Eigen::Vector3d(curr_image.camera.C).cast<float>();
 			domset_views.push_back(v);
-			++curr_idx;
+			++curr_ID;
 		}
 	}
 
@@ -307,11 +307,6 @@ int main(int argc, LPCTSTR* argv)
 		scene_cluster.pointcloud.Save(baseFileName + String::FormatString("_cluster_%i.ply", i));
 	}
 	
-
-	#if TD_VERBOSE != TD_VERBOSE_OFF
-	if (VERBOSITY_LEVEL > 2)
-		scene.ExportCamerasMLP(baseFileName+_T(".mlp"), baseFileName+_T(".ply"));
-	#endif
 	}
 
 	Finalize();

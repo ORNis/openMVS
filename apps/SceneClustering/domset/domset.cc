@@ -41,8 +41,8 @@ void Domset::normalizePointCloud()
 
   const size_t numResults(1);
   const size_t numPoints(points.size());
-  float totalDist = 0.f;
-  pcCentre.pos << 0.f, 0.f, 0.f;
+  float totalDist = 0.0;
+  pcCentre.pos = Eigen::Vector3f::Zero();
 #if DOMSET_USE_OPENMP
 #pragma omp parallel for
 #endif
@@ -52,18 +52,17 @@ void Domset::normalizePointCloud()
     const float queryPt[3] = {p.pos(0), p.pos(1), p.pos(2)};
 
     std::vector<size_t> ret_index(2);
-    std::vector<float> out_dist_sqr(2);
-    index.knnSearch(queryPt, 2, &ret_index[0], &out_dist_sqr[0]);
+    std::vector<float> out_dist_sq(2);
 
+    index.knnSearch(queryPt, 2, &ret_index[0], &out_dist_sq[0]);
 #if DOMSET_USE_OPENMP
-#pragma omp critical(TotalDistanceUpdate)
+#pragma omp critical(distUpdate)
 #endif
     {
-      totalDist += (p.pos - points[ret_index[1]].pos).norm();
+      totalDist += std::sqrt(out_dist_sq[1]);
       pcCentre.pos += (p.pos / numPoints);
     }
   }
-
   // calculation the normalization scale
   const float avgDist = totalDist / numPoints;
   std::cerr << "Total distance = " << totalDist << std::endl;
@@ -493,7 +492,7 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
     {
       if (S(i, c) > maxSim)
       {
-        idxForI = i;
+        idxForI = c;
         maxSim = S(i, c);
       }
     }
@@ -594,7 +593,7 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
       }
     }
   } while (change);
-  
+
   // Filling NonOverlapClusters
   for (auto p = clMap.begin(); p != clMap.end(); ++p)
   {
@@ -656,7 +655,6 @@ void Domset::computeClustersAP(std::map<size_t, size_t> &xId2vId,
       }
       clMap[clId].push_back(c);
     }
-    std::cout << std::endl;
     finalBorders.push_back(borders);
   }
 
