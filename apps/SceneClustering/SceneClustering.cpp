@@ -32,8 +32,12 @@
 
 #include "../../libs/MVS/Common.h"
 #include "../../libs/MVS/Scene.h"
+
 #include "domset/domset.h"
+
 #include <boost/program_options.hpp>
+#include <opencv2/ml/ml.hpp>
+
 
 using namespace MVS;
 
@@ -44,7 +48,6 @@ using namespace MVS;
 
 
 // S T R U C T S ///////////////////////////////////////////////////
-
 namespace OPT {
 String strInputFileName;
 String strOutputDirectory;
@@ -59,6 +62,54 @@ unsigned nMaxThreads;
 String strConfigFileName;
 boost::program_options::variables_map vm;
 } // namespace OPT
+
+/*
+template<unsigned int N>
+class BucketImage
+{
+public:
+  BucketImage(int width = 0, int height = 0): height_(height), width_(width){
+    size_cell_x_ = width_ / double(NUM_CELL_ONE_DIM);
+    size_cell_y_ = height_ / double(NUM_CELL_ONE_DIM);
+  }
+  
+  void insert(const Vec2 &pos, const Vec3 & point)
+  {
+    size_t idx = std::floor(pos.x() / size_cell_x_);
+    size_t idy = std::floor(pos.y() / size_cell_y_);
+    points_in_cells[idx][idy].push_back(point);
+  }
+
+  std::vector<Vec3> get_mean_points(unsigned int threshold) const
+  {
+    std::vector<Vec3> result;
+
+    for(int i = 0; i < NUM_CELL_ONE_DIM; ++i)
+    {
+      for(int j = 0; j < NUM_CELL_ONE_DIM; ++j)
+      {
+        if(points_in_cells[i][j].size() < threshold)
+          continue;
+        
+        Vec3 acc = Vec3::Zero();
+        for(const auto & pt : points_in_cells[i][j])
+        {
+          acc += pt;
+        }
+        result.push_back(acc /= points_in_cells[i][j].size());
+      }
+    }
+    return result;
+  }
+private:
+  static constexpr unsigned int NUM_CELL_LEVEL = 4;
+  static constexpr unsigned int NUM_CELL_TOTAL = std::pow(NUM_CELL_LEVEL, N);
+  static constexpr unsigned int NUM_CELL_ONE_DIM = std::pow(NUM_CELL_LEVEL/2, N);
+  std::array<std::array<std::vector<Vec3>,  NUM_CELL_ONE_DIM>, NUM_CELL_ONE_DIM> points_in_cells;
+  int width_, height_;
+  double size_cell_x_, size_cell_y_;
+}; // BucketImage
+ */
 
 // initialize and parse the command line parameters
 bool Initialize(size_t argc, LPCTSTR* argv)
@@ -95,7 +146,7 @@ bool Initialize(size_t argc, LPCTSTR* argv)
 		("min-cluster-size,m", boost::program_options::value<unsigned>(&OPT::nMinClusterSize)->default_value(30), "Min number of camera in a cluster" )
 		("max-cluster-size,M", boost::program_options::value<unsigned>(&OPT::nMaxClusterSize)->default_value(50), "Max number of camera in a cluster")
 		("cluster-overlap,o", boost::program_options::value<float>(&OPT::fPerCentClusterOverlap)->default_value(0.1), "Percentage of overlap expressed inside the range [0.0;1.0]" )
-		//("svm-classification,s", boost::program_options::bool_switch(&OPT::bDoSVM), "Do the SVM classification [NOT Implemented yet]" )
+		("svm-classification,s", boost::program_options::bool_switch(&OPT::bDoSVM), "Do the SVM classification" )
 		;
 
 	boost::program_options::options_description cmdline_options;
@@ -315,7 +366,61 @@ int main(int argc, LPCTSTR* argv)
 		sceneCluster.pointcloud.Save(baseFileName + String::FormatString("_cluster_%04u.ply", i));
 	}
 	
-	}
+	// compute SVM classification
+	if(OPT::bDoSVM) {
+		TD_TIMER_START();
+		LOG("SVM classification"); 
+		std::map<uint32_t, std::vector<SEACAVE::Point3>> mapClusterToPoints; //temporary map to keep track of point of each cluster
+  	
+		const auto clustersWithoutOverlap = domsetInstance.getClustersWithoutOverlap();
+
+		for(size_t i = 0; i < clustersWithoutOverlap.size(); ++i) {
+
+			const auto cluster = clustersWithoutOverlap[i];
+			for(const auto inClusterID : cluster) {
+				const uint32_t globalID = viewBkwdReindex[inClusterID];
+				mapClusterToPoints[i].push_back(scene.images[globalID].camera.C);  // it is valid, already checked above
+			}
+
+		}
+
+		size_t total_points = 0;
+		for(const auto points: mapClusterToPoints) {
+			total_points += points.second.size();
+		}
+
+
+		
+		//SVM data structure
+		cv::Mat trainingDataMat = cv::Mat::zeros(total_points, 3, CV_32FC1); //TODO
+		cv::Mat labelsMat = cv::Mat::zeros(total_points, 1, CV_32SC1); //TODO
+
+		int idx = 0;
+  		for (const auto &cl :mapClusterToPoints)
+  		{
+    		for (const auto &pt : cl.second)
+    		{
+      			labelsMat.at<uint32_t>(idx) = cl.first;
+      			trainingDataMat.at<float>(idx, 0) = static_cast<float>(pt.x);
+      			trainingDataMat.at<float>(idx, 1) = static_cast<float>(pt.y);
+      			trainingDataMat.at<float>(idx, 2) = static_cast<float>(pt.z);
+      			++idx;
+    		}
+		}
+
+		LOG("Computing SVM parameters...");
+  		auto svm = cv::ml::SVM::create();
+  		svm->setType(cv::ml::SVM::C_SVC);
+  		svm->setKernel(cv::ml::SVM::RBF);
+  		svm->setTermCriteria(cv::TermCriteria(cv::TermCriteria::MAX_ITER, 1000, 1e-8));
+  		auto train_data = cv::ml::TrainData::create(trainingDataMat, cv::ml::ROW_SAMPLE, labelsMat);
+  		svm->trainAuto(train_data);
+		svm->save("svm_param.yml"); //TODO
+		VERBOSE("SVM claissification done (%s)", TD_TIMER_GET_FMT().c_str());
+	
+	} // if(OPT::bDoSVM)
+
+	} // RAII
 
 	Finalize();
 	return EXIT_SUCCESS;

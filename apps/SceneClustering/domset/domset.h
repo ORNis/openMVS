@@ -81,9 +81,14 @@ public:
   /* export function */
   void exportToPLY(const std::string &plyFile, bool exportPoints = false);
 
-  const std::vector<std::vector<size_t>> &getClusters()
+  const std::vector<std::vector<size_t>> &getClusters() const
   {
     return finalClusters;
+  }
+
+  const std::vector<std::vector<size_t>> &getClustersWithoutOverlap() const 
+  {
+    return nonOverlapClusters;
   }
 
   void setClusters(std::vector<std::vector<size_t>> clusters)
