@@ -63,53 +63,56 @@ String strConfigFileName;
 boost::program_options::variables_map vm;
 } // namespace OPT
 
-/*
-template<unsigned int N>
+
+template<uint32_t N>
 class BucketImage
 {
 public:
-  BucketImage(int width = 0, int height = 0): height_(height), width_(width){
+  BucketImage(uint32_t width = 0, uint32_t height = 0): width_(width), height_(height){
     size_cell_x_ = width_ / double(NUM_CELL_ONE_DIM);
     size_cell_y_ = height_ / double(NUM_CELL_ONE_DIM);
   }
   
-  void insert(const Vec2 &pos, const Vec3 & point)
+  void Insert(const Point2d &pos, const Point3d &point)
   {
-    size_t idx = std::floor(pos.x() / size_cell_x_);
-    size_t idy = std::floor(pos.y() / size_cell_y_);
-    points_in_cells[idx][idy].push_back(point);
+	  	double x = CLAMP(pos.x, 0.+1e-9, double(width_)-1e-9);
+		double y = CLAMP(pos.y, 0.+1e-9, double(height_)-1e-9);
+    	uint32_t idx = FLOOR2INT(x / size_cell_x_);
+    	uint32_t idy = FLOOR2INT(y / size_cell_y_);
+    	pointsInCells_[idy * NUM_CELL_ONE_DIM + idx].push_back(point);
   }
 
-  std::vector<Vec3> get_mean_points(unsigned int threshold) const
+  std::vector<Point3d> GetMeanPoints(uint32_t threshold) const
   {
-    std::vector<Vec3> result;
+    std::vector<Point3d> result;
 
-    for(int i = 0; i < NUM_CELL_ONE_DIM; ++i)
+    for(uint32_t i = 0; i < NUM_CELL_ONE_DIM; ++i)
     {
-      for(int j = 0; j < NUM_CELL_ONE_DIM; ++j)
+      for(uint32_t j = 0; j < NUM_CELL_ONE_DIM; ++j)
       {
-        if(points_in_cells[i][j].size() < threshold)
+		uint32_t id = j * NUM_CELL_ONE_DIM + i;
+        if(pointsInCells_[id].size() < threshold)
           continue;
         
-        Vec3 acc = Vec3::Zero();
-        for(const auto & pt : points_in_cells[i][j])
+        Point3d acc = Point3d(0.,0.,0.);
+        for(const auto & pt : pointsInCells_[id])
         {
-          acc += pt;
+          acc += Point3d(pt);
         }
-        result.push_back(acc /= points_in_cells[i][j].size());
+        result.push_back(acc /= pointsInCells_[id].size());
       }
     }
     return result;
   }
+
 private:
-  static constexpr unsigned int NUM_CELL_LEVEL = 4;
-  static constexpr unsigned int NUM_CELL_TOTAL = std::pow(NUM_CELL_LEVEL, N);
-  static constexpr unsigned int NUM_CELL_ONE_DIM = std::pow(NUM_CELL_LEVEL/2, N);
-  std::array<std::array<std::vector<Vec3>,  NUM_CELL_ONE_DIM>, NUM_CELL_ONE_DIM> points_in_cells;
-  int width_, height_;
+  static constexpr uint32_t NUM_CELL_LEVEL = 4;
+  static constexpr uint32_t NUM_CELL_TOTAL = std::pow(NUM_CELL_LEVEL, N);
+  static constexpr uint32_t NUM_CELL_ONE_DIM = std::pow(NUM_CELL_LEVEL/2, N);
+  std::array<std::vector<PointCloud::Point>,  NUM_CELL_TOTAL> pointsInCells_;
+  uint32_t width_, height_;
   double size_cell_x_, size_cell_y_;
 }; // BucketImage
- */
 
 // initialize and parse the command line parameters
 bool Initialize(size_t argc, LPCTSTR* argv)
@@ -366,34 +369,64 @@ int main(int argc, LPCTSTR* argv)
 		sceneCluster.pointcloud.Save(baseFileName + String::FormatString("_cluster_%04u.ply", i));
 	}
 	
-	// compute SVM classification
+	// Compute SVM classification
 	if(OPT::bDoSVM) {
 		TD_TIMER_START();
 		LOG("SVM classification"); 
-		std::map<uint32_t, std::vector<SEACAVE::Point3>> mapClusterToPoints; //temporary map to keep track of point of each cluster
-  	
+		std::map<uint32_t, std::vector<Point3>> mapClusterToPoints; // temporary map to keep track of points in each cluster
+		std::map<uint32_t, uint32_t> mapCameraToCluster; // temporary map to keep track of cluster of each camera
+
+		// We get the clusters without overlap
 		const auto clustersWithoutOverlap = domsetInstance.getClustersWithoutOverlap();
 
-		for(size_t i = 0; i < clustersWithoutOverlap.size(); ++i) {
-
+		// We insert every camera center into the mapClusterToPoints
+		for(uint32_t i = 0; i < clustersWithoutOverlap.size(); ++i) {
 			const auto cluster = clustersWithoutOverlap[i];
 			for(const auto inClusterID : cluster) {
 				const uint32_t globalID = viewBkwdReindex[inClusterID];
 				mapClusterToPoints[i].push_back(scene.images[globalID].camera.C);  // it is valid, already checked above
+				mapCameraToCluster[globalID] = i;
 			}
-
 		}
 
-		size_t total_points = 0;
+		// Now we init our datastructure that will help us to reduce
+		using BucketImageType = BucketImage<2>;
+		std::map<uint32_t, BucketImageType> mapBucketImage;
+		FOREACH(idx, scene.images) {
+			const auto & image = scene.images[idx];
+			if(image.IsValid()) {
+				mapBucketImage[idx] = BucketImageType(image.width, image.height);
+			}
+		}
+
+		FOREACH(idxP, scene.pointcloud.points) {
+			const auto & views = scene.pointcloud.pointViews[idxP];
+			const Point3 & point = scene.pointcloud.points[idxP];
+
+			FOREACH(idxV, views) {
+				const Camera & cam = scene.images[views[idxV]].camera;
+				const Point2d ptImage = cam.TransformPointW2I(point);
+				mapBucketImage[views[idxV]].Insert(ptImage, point);
+			}
+		}
+
+		for(const auto & bucketImage : mapBucketImage) {
+			uint32_t clusterID = mapCameraToCluster.at(bucketImage.first);
+			const auto & meanPoints = bucketImage.second.GetMeanPoints(5);
+			auto & clPoints = mapClusterToPoints[clusterID];
+			clPoints.insert(clPoints.end(), meanPoints.begin(), meanPoints.end());
+		}
+
+		uint32_t total_points = 0;
 		for(const auto points: mapClusterToPoints) {
 			total_points += points.second.size();
 		}
 
+		LOG(_T("total points used for SVM classification %u"), total_points);
 
-		
 		//SVM data structure
-		cv::Mat trainingDataMat = cv::Mat::zeros(total_points, 3, CV_32FC1); //TODO
-		cv::Mat labelsMat = cv::Mat::zeros(total_points, 1, CV_32SC1); //TODO
+		cv::Mat trainingDataMat = cv::Mat::zeros(total_points, 3, CV_32FC1); //it's a pity that openCV can't do SVM with double
+		cv::Mat labelsMat = cv::Mat::zeros(total_points, 1, CV_32SC1);
 
 		int idx = 0;
   		for (const auto &cl :mapClusterToPoints)
@@ -415,7 +448,7 @@ int main(int argc, LPCTSTR* argv)
   		svm->setTermCriteria(cv::TermCriteria(cv::TermCriteria::MAX_ITER, 1000, 1e-8));
   		auto train_data = cv::ml::TrainData::create(trainingDataMat, cv::ml::ROW_SAMPLE, labelsMat);
   		svm->trainAuto(train_data);
-		svm->save("svm_param.yml"); //TODO
+		svm->save("svm_param.yml"); //TODO naming
 		VERBOSE("SVM claissification done (%s)", TD_TIMER_GET_FMT().c_str());
 	
 	} // if(OPT::bDoSVM)
